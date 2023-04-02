@@ -1,4 +1,4 @@
-use std::time::{Instant, Duration};
+use std::time::Duration;
 
 use dashmap::DashSet;
 use r2d2_sqlite::rusqlite::params;
@@ -110,7 +110,6 @@ fn ensure_chunks(
     view_dist: u8,
     chunks_set: Option<&DashSet<ChunkPos>>,
 ) -> anyhow::Result<()> {
-    let start = Instant::now();
     let chunks = viewable_chunks(pos, view_dist);
 
     let chunks: Vec<_> = chunks
@@ -124,11 +123,9 @@ fn ensure_chunks(
         .map(|pos| (pos, single_chunk(&pos).unwrap()))
         .collect();
 
-    dbg!(chunks.len());
     for (pos, chunk) in chunks {
         inst.insert_chunk(pos, chunk);
     }
-    dbg!(start.elapsed());
 
     Ok(())
 }
