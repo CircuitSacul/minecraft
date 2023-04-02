@@ -1,11 +1,11 @@
 use std::time::Duration;
 
+use bevy::time::{Time, Timer, TimerMode};
 use dashmap::DashSet;
 use r2d2_sqlite::rusqlite::params;
 use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::*;
 use valence::prelude::*;
-use bevy::time::{Time, Timer, TimerMode};
 
 use crate::POOL;
 
@@ -16,14 +16,16 @@ pub struct SetupPlugin;
 
 impl Plugin for SetupPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .insert_resource(ChunkGenTimer(Timer::new(Duration::from_secs(1), TimerMode::Repeating)))
-            .add_startup_system(build_world)
-            .add_system(init_clients)
-            .add_system(generate_chunks)
-            .add_system(default_event_handler.in_schedule(EventLoopSchedule))
-            .add_systems(PlayerList::default_systems())
-            .add_system(despawn_disconnected_clients);
+        app.insert_resource(ChunkGenTimer(Timer::new(
+            Duration::from_secs(1),
+            TimerMode::Repeating,
+        )))
+        .add_startup_system(build_world)
+        .add_system(init_clients)
+        .add_system(generate_chunks)
+        .add_system(default_event_handler.in_schedule(EventLoopSchedule))
+        .add_systems(PlayerList::default_systems())
+        .add_system(despawn_disconnected_clients);
     }
 }
 
@@ -44,7 +46,6 @@ fn build_world(
 fn init_clients(
     mut clients: Query<
         (
-            &mut Client,
             &mut Position,
             &mut Location,
             &mut IsFlat,
@@ -56,20 +57,21 @@ fn init_clients(
     mut instances: Query<(Entity, &mut Instance)>,
 ) {
     let (ent, mut inst) = instances.single_mut();
-    for (mut client, mut pos, mut loc, mut is_flat, mut mode, mut dist) in &mut clients {
+    let mut positions = Vec::new();
+    for (mut pos, mut loc, mut is_flat, mut mode, mut dist) in &mut clients {
         *mode = GameMode::Survival;
         is_flat.0 = true;
         pos.0 = (0., 1., 0.).into();
         loc.0 = ent;
         dist.set(32);
 
-        // generate the closest chunks to ensure that the user doesn't fall out of the world
-        let ret = ensure_chunks(&mut inst, &pos, dist.get(), None);
-        if let Err(why) = ret {
-            eprintln!("{why}");
-        }
+        positions.push((*pos, dist.get()));
+    }
 
-        client.send_message("Welcome to my server!");
+    // generate the closest chunks to ensure that the user doesn't fall out of the world
+    let ret = ensure_chunks(&mut inst, positions, None);
+    if let Err(why) = ret {
+        eprintln!("{why}");
     }
 }
 
@@ -88,36 +90,36 @@ fn generate_chunks(
 
     let all_chunks = DashSet::new();
 
-    for view in clients.iter() {
-        let ret = ensure_chunks(
-            &mut inst,
-            view.pos,
-            view.view_dist.get(),
-            Some(&all_chunks),
-        );
-
-        if let Err(why) = ret {
-            eprintln!("{why}");
-        }
+    let ret = ensure_chunks(
+        &mut inst,
+        clients
+            .into_iter()
+            .map(|view| (*view.pos, view.view_dist.get()))
+            .collect::<Vec<_>>(),
+        Some(&all_chunks),
+    );
+    if let Err(why) = ret {
+        eprintln!("{why}");
     }
 
     inst.retain_chunks(|pos, _| all_chunks.contains(&pos));
 }
 
-fn ensure_chunks(
+fn ensure_chunks<Iter: IntoParallelIterator<Item = (Position, u8)>>(
     inst: &mut Instance,
-    pos: &Position,
-    view_dist: u8,
+    positions: Iter,
     chunks_set: Option<&DashSet<ChunkPos>>,
 ) -> anyhow::Result<()> {
-    let chunks = viewable_chunks(pos, view_dist);
-
-    let chunks: Vec<_> = chunks
-        .map(|pos| {
+    let chunks: Vec<_> = positions
+        .into_par_iter()
+        .flat_map(|(pos, dist)| viewable_chunks(pos, dist))
+        .filter_map(|pos| {
             if let Some(hs) = chunks_set {
-                hs.insert(pos);
+                if !hs.insert(pos) {
+                    return None;
+                }
             }
-            pos
+            Some(pos)
         })
         .filter(|pos| inst.chunk(*pos).is_none())
         .map(|pos| (pos, single_chunk(&pos).unwrap()))
@@ -165,7 +167,7 @@ fn single_chunk(pos: &ChunkPos) -> anyhow::Result<Chunk> {
     Ok(chunk)
 }
 
-fn viewable_chunks(pos: &Position, dist: u8) -> impl ParallelIterator<Item = ChunkPos> {
+fn viewable_chunks(pos: Position, dist: u8) -> impl ParallelIterator<Item = ChunkPos> {
     let dist: i32 = dist.into();
     let pos = ChunkPos::at(pos.get().x, pos.get().z);
 

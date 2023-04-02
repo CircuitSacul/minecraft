@@ -1,5 +1,5 @@
-mod setup;
 mod building;
+mod setup;
 
-pub use setup::SetupPlugin;
 pub use building::BuildingPlugin;
+pub use setup::SetupPlugin;
