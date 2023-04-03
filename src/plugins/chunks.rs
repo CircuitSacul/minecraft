@@ -5,7 +5,10 @@ use fxhash::FxHashSet;
 use r2d2_sqlite::rusqlite::params;
 use valence::prelude::*;
 
-use crate::{utils::interleave::IntoInterleave, POOL};
+use crate::{
+    utils::{interleave::IntoInterleave, unique::IntoUnique},
+    POOL,
+};
 
 #[derive(Resource)]
 struct ChunksTimer(Timer);
@@ -87,6 +90,7 @@ fn generate_chunks(
         // load chunks
         let chunks = viewed_chunks_vec
             .into_iter()
+            .unique()
             .take(100)
             .map(|pos| tokio::spawn(async move { (pos, load_chunk(pos).await.unwrap()) }));
         let mut chunks_to_insert = Vec::new();

@@ -1,7 +1,7 @@
-pub struct Interleave<Iter: Iterator<Item = Item>, Item>(Vec<Iter>);
+pub struct Interleave<Iter: Iterator>(Vec<Iter>);
 
-impl<Iter: Iterator<Item = Item>, Item> Iterator for Interleave<Iter, Item> {
-    type Item = Item;
+impl<Iter: Iterator> Iterator for Interleave<Iter> {
+    type Item = Iter::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -15,14 +15,16 @@ impl<Iter: Iterator<Item = Item>, Item> Iterator for Interleave<Iter, Item> {
     }
 }
 
-pub trait IntoInterleave<Iter: Iterator<Item = Item>, Item> {
-    fn interleave(self) -> Interleave<Iter, Item>;
+pub trait IntoInterleave<Iter: Iterator> {
+    fn interleave(self) -> Interleave<Iter>;
 }
 
-impl<Iter: Iterator<Item = Item>, Item, Outer: IntoIterator<Item = Iter>> IntoInterleave<Iter, Item>
-    for Outer
+impl<Iters> IntoInterleave<Iters::Item> for Iters
+where
+    Iters: Iterator,
+    Iters::Item: Iterator,
 {
-    fn interleave(self) -> Interleave<Iter, Item> {
+    fn interleave(self) -> Interleave<Iters::Item> {
         Interleave(self.into_iter().collect())
     }
 }
