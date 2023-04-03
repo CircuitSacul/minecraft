@@ -17,6 +17,8 @@ lazy_static! {
 }
 
 fn main() -> anyhow::Result<()> {
+    let _ = std::fs::create_dir("data");
+
     POOL.get()?.execute(
         r#"
         CREATE TABLE IF NOT EXISTS blocks (
