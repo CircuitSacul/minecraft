@@ -8,10 +8,13 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.70"
 bevy = { version = "0.10.1", default-features = false }
-dashmap = "5.4.0"
+bevy-tokio-tasks = "0.10.1"
+futures-lite = "1.12.0"
+fxhash = "0.2.1"
 lazy_static = "1.4.0"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rayon = "1.7.0"
+tokio = "1.27.0"
 valence = { git = "https://github.com/valence-rs/valence.git" }
 valence_protocol = { git = "https://github.com/valence-rs/valence.git" }

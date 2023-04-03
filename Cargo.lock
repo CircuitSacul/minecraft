@@ -265,6 +265,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy-tokio-tasks"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e51bf10a4a62b3b83e5ce6f67bea32ee452ca1b5f6da4ad780f928614c3423e"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "tokio",
+]
+
+[[package]]
 name = "bevy_a11y"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1078,19 +1089,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashmap"
-version = "5.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "907076dfda823b0b36d2a1bb5f90c96660a5bbcd7729e10727f07858f22c4edc"
-dependencies = [
- "cfg-if",
- "hashbrown",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
 name = "der"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1814,11 +1812,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
- "dashmap",
+ "bevy-tokio-tasks",
+ "futures-lite",
+ "fxhash",
  "lazy_static",
  "r2d2",
  "r2d2_sqlite",
  "rayon",
+ "tokio",
  "valence",
  "valence_protocol",
 ]

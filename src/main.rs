@@ -1,8 +1,10 @@
 #![allow(clippy::type_complexity)]
 
 mod plugins;
+mod utils;
 
 use bevy::time::TimePlugin;
+use bevy_tokio_tasks::TokioTasksPlugin;
 use lazy_static::lazy_static;
 use r2d2_sqlite::rusqlite::params;
 use valence::prelude::*;
@@ -31,8 +33,10 @@ fn main() -> anyhow::Result<()> {
 
     App::new()
         .add_plugin(TimePlugin)
+        .add_plugin(TokioTasksPlugin::default())
         .add_plugin(ServerPlugin::new(()).with_connection_mode(ConnectionMode::Offline))
         .add_plugin(plugins::SetupPlugin)
+        .add_plugin(plugins::ChunksPlugin)
         .add_plugin(plugins::BuildingPlugin)
         .run();
 
