@@ -1,4 +1,4 @@
-use bevy_tokio_tasks::TokioTasksRuntime;
+use bevy::tasks::AsyncComputeTaskPool;
 use r2d2_sqlite::rusqlite::params;
 use valence::prelude::{event::StopDestroyBlock, *};
 
@@ -12,22 +12,22 @@ impl Plugin for BuildingPlugin {
     }
 }
 
-fn block_break(
-    mut instances: Query<&mut Instance>,
-    mut events: EventReader<StopDestroyBlock>,
-    runtime: Res<TokioTasksRuntime>,
-) {
+fn block_break(mut instances: Query<&mut Instance>, mut events: EventReader<StopDestroyBlock>) {
     let mut inst = instances.single_mut();
+
+    let thread_pool = AsyncComputeTaskPool::get();
 
     for event in events.iter() {
         inst.set_block(event.position, BlockState::AIR);
 
         let pos = event.position;
-        runtime.spawn_background_task(move |_ctx| async move {
-            if let Err(why) = sql_set_block(pos, BlockState::AIR) {
-                eprintln!("{why}");
-            }
-        });
+        thread_pool
+            .spawn(async move {
+                if let Err(why) = sql_set_block(pos, BlockState::AIR) {
+                    eprintln!("{why}");
+                }
+            })
+            .detach();
     }
 }
 

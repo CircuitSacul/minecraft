@@ -1,8 +1,6 @@
-use bevy::time::{Time, Timer, TimerMode};
-use bevy_tokio_tasks::TokioTasksRuntime;
-use futures_lite::future;
-use fxhash::FxHashSet;
+use bevy::tasks::AsyncComputeTaskPool;
 use r2d2_sqlite::rusqlite::params;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use valence::prelude::*;
 
 use crate::{
@@ -11,106 +9,94 @@ use crate::{
 };
 
 #[derive(Resource)]
-struct ChunksTimer(Timer);
+pub struct GenChunksTx(Sender<ChunkPos>);
+
+#[derive(Resource)]
+pub struct InsertChunksRx(Receiver<(ChunkPos, Chunk)>);
 
 pub struct ChunksPlugin;
 
 impl Plugin for ChunksPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ChunksTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
-            .add_system(ensure_vital_chunks.before(default_event_handler))
-            .add_system(generate_chunks);
+        app.add_startup_system(chunk_gen_worker)
+            .add_system(unload_chunks)
+            .add_system(insert_chunks)
+            .add_system(request_chunk_gen);
     }
 }
 
-fn ensure_vital_chunks(mut instances: Query<&mut Instance>, clients: Query<View, With<Client>>) {
-    let mut inst = instances.single_mut();
-    for view in clients.into_iter() {
-        let pos = view.pos.chunk_pos();
-        let poss = [
-            ChunkPos::new(pos.x + 1, pos.z + 1),
-            ChunkPos::new(pos.x + 1, pos.z),
-            ChunkPos::new(pos.x + 1, pos.z - 1),
-            ChunkPos::new(pos.x, pos.z - 1),
-            pos,
-            ChunkPos::new(pos.x, pos.z + 1),
-            ChunkPos::new(pos.x - 1, pos.z + 1),
-            ChunkPos::new(pos.x - 1, pos.z),
-            ChunkPos::new(pos.x - 1, pos.z - 1),
-        ];
+fn unload_chunks(mut insts: Query<&mut Instance>) {
+    let mut inst = insts.single_mut();
+    inst.retain_chunks(|_, chunk| chunk.is_viewed_mut());
+}
 
-        for pos in poss {
-            if inst.chunk(pos).is_some() {
-                continue;
-            }
+fn insert_chunks(mut insts: Query<&mut Instance>, mut rx: ResMut<InsertChunksRx>) {
+    let mut inst = insts.single_mut();
 
-            inst.insert_chunk(
-                pos,
-                future::block_on(async move { load_chunk(pos).await.unwrap() }),
-            );
-        }
+    while let Ok((pos, chunk)) = rx.0.try_recv() {
+        inst.insert_chunk(pos, chunk);
     }
 }
 
-fn generate_chunks(
-    mut timer: ResMut<ChunksTimer>,
-    time: Res<Time>,
-    clients: Query<View, With<Client>>,
-    runtime: Res<TokioTasksRuntime>,
+fn request_chunk_gen(
+    insts: Query<&Instance>,
+    views: Query<(View, OldView, Ref<Client>)>,
+    tx: Res<GenChunksTx>,
 ) {
-    // tick the timer
-    timer.0.tick(time.delta());
-    if !timer.0.just_finished() {
-        return;
-    }
+    let inst = insts.single();
+    let chunks: Vec<_> = views
+        .into_iter()
+        .map(|(current, old, client)| {
+            let add_all = client.is_added();
+            let current = current.get();
+            let old = old.get();
+            viewable_chunks(current).map(move |pos| (pos, !add_all && old.contains(pos)))
+        })
+        .interleave()
+        .filter_map(|(pos, drop)| if drop { None } else { Some(pos) })
+        .filter(|pos| inst.chunk(*pos).is_none())
+        .unique()
+        .collect();
 
-    let positions: Vec<_> = clients.iter().map(|view| view.get()).collect();
-    runtime.spawn_background_task(move |mut ctx| async move {
-        // generate the chunks that are viewable by players
-        let mut viewed_chunks_vec: Vec<_> = positions
-            .iter()
-            .copied()
-            .map(viewable_chunks)
-            .interleave()
-            .collect();
-        let viewed_chunks_set: FxHashSet<_> = viewed_chunks_vec.iter().copied().collect();
-
-        // unload chunks that are no longer viewable
-        let viewed_chunks_vec = ctx
-            .run_on_main_thread(move |ctx| {
-                let mut query = ctx.world.query::<&mut Instance>();
-                let mut inst = query.single_mut(ctx.world);
-
-                inst.retain_chunks(|pos, _| viewed_chunks_set.contains(&pos));
-                viewed_chunks_vec.retain(|pos| inst.chunk(*pos).is_none());
-                viewed_chunks_vec
-            })
-            .await;
-
-        // load chunks
-        let chunks = viewed_chunks_vec
-            .into_iter()
-            .unique()
-            .take(100)
-            .map(|pos| tokio::spawn(async move { (pos, load_chunk(pos).await.unwrap()) }));
-        let mut chunks_to_insert = Vec::new();
-        for chunk_fut in chunks {
-            chunks_to_insert.push(chunk_fut.await.unwrap());
-        }
-
-        ctx.run_on_main_thread(move |ctx| {
-            let mut query = ctx.world.query::<&mut Instance>();
-            let mut inst = query.single_mut(ctx.world);
-
-            for (pos, chunk) in chunks_to_insert {
-                inst.insert_chunk(pos, chunk);
+    let tx = tx.0.clone();
+    let thread_pool = AsyncComputeTaskPool::get();
+    thread_pool
+        .spawn(async move {
+            for chunk in chunks {
+                tx.send(chunk).await.unwrap();
             }
         })
-        .await;
-    });
+        .detach();
 }
 
-async fn load_chunk(pos: ChunkPos) -> anyhow::Result<Chunk> {
+fn chunk_gen_worker(mut commands: Commands) {
+    let (gen_tx, mut gen_rx) = channel(1_000_000);
+    let (insert_tx, insert_rx) = channel(1_000_000);
+
+    commands.insert_resource(GenChunksTx(gen_tx));
+    commands.insert_resource(InsertChunksRx(insert_rx));
+
+    let thread_pool = AsyncComputeTaskPool::get();
+    thread_pool
+        .spawn(async move {
+            while let Some(pos) = gen_rx.recv().await {
+                let chunk = match gen_chunk(pos).await {
+                    Ok(chunk) => chunk,
+                    Err(why) => {
+                        eprintln!("Warning: Chunk generation failed: {why}");
+                        continue;
+                    }
+                };
+
+                if let Err(why) = insert_tx.send((pos, chunk)).await {
+                    eprintln!("Warning: Sending generated chunk failed: {why}");
+                }
+            }
+        })
+        .detach();
+}
+
+async fn gen_chunk(pos: ChunkPos) -> anyhow::Result<Chunk> {
     let mut chunk = Chunk::new(4);
 
     for x in 0..16 {
@@ -141,9 +127,9 @@ async fn load_chunk(pos: ChunkPos) -> anyhow::Result<Chunk> {
 
 fn viewable_chunks(view: ChunkView) -> impl Iterator<Item = ChunkPos> {
     let pos = view.pos;
-    let dist: i32 = view.dist.into();
+    let dist = view.dist as i32 + 2;
 
-    (0..=dist + 1)
+    (0..=dist)
         .flat_map(move |d| {
             let x_rng = pos.x - d..=pos.x + d;
             let z_rng = pos.z - d + 1..pos.z + d;
@@ -154,4 +140,5 @@ fn viewable_chunks(view: ChunkView) -> impl Iterator<Item = ChunkPos> {
             x_lines.chain(z_lines)
         })
         .map(|(x, z)| ChunkPos::new(x, z))
+        .filter(move |pos| view.contains(*pos))
 }

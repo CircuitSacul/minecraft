@@ -1,5 +1,7 @@
 use valence::prelude::*;
 
+use super::teleport::SetClientLocation;
+
 pub struct SetupPlugin;
 
 impl Plugin for SetupPlugin {
@@ -29,8 +31,9 @@ fn build_world(
 fn init_clients(
     mut clients: Query<
         (
-            &mut Position,
+            Entity,
             &mut Location,
+            &mut Position,
             &mut IsFlat,
             &mut GameMode,
             &mut ViewDistance,
@@ -38,13 +41,17 @@ fn init_clients(
         Added<Client>,
     >,
     mut instances: Query<Entity, With<Instance>>,
+    mut teleport: ResMut<SetClientLocation>,
 ) {
     let inst = instances.single_mut();
-    for (mut pos, mut loc, mut is_flat, mut mode, mut dist) in &mut clients {
+    for (id, mut loc, mut pos, mut is_flat, mut mode, mut dist) in &mut clients {
         *mode = GameMode::Survival;
         is_flat.0 = true;
-        pos.0 = (0., 1., 0.).into();
-        loc.0 = inst;
         dist.set(32);
+
+        loc.0 = inst;
+        pos.0 = (0., 0.1, 0.).into();
+
+        teleport.set_location(id, inst, *pos);
     }
 }
