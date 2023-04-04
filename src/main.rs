@@ -3,7 +3,7 @@
 mod plugins;
 mod utils;
 
-use bevy::{prelude::TaskPoolPlugin, time::TimePlugin};
+use bevy::prelude::TaskPoolPlugin;
 use lazy_static::lazy_static;
 use r2d2_sqlite::rusqlite::params;
 use valence::prelude::*;
@@ -33,12 +33,11 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     App::new()
-        .add_plugin(TimePlugin)
         .add_plugin(TaskPoolPlugin::default())
         .add_plugin(ServerPlugin::new(()).with_connection_mode(ConnectionMode::Offline))
-        .add_plugin(plugins::TeleportPlugin)
         .add_plugin(plugins::SetupPlugin)
         .add_plugin(plugins::ChunksPlugin)
+        .add_plugin(plugins::TeleportPlugin)
         .add_plugin(plugins::BuildingPlugin)
         .run();
 
