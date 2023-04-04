@@ -40,20 +40,14 @@ fn insert_chunks(mut insts: Query<&mut Instance>, mut rx: ResMut<InsertChunksRx>
 
 fn request_chunk_gen(
     insts: Query<&Instance>,
-    views: Query<(View, OldView, Ref<Client>)>,
+    views: Query<View, With<Client>>,
     tx: Res<GenChunksTx>,
 ) {
     let inst = insts.single();
     let chunks: Vec<_> = views
         .into_iter()
-        .map(|(current, old, client)| {
-            let add_all = client.is_added();
-            let current = current.get();
-            let old = old.get();
-            viewable_chunks(current).map(move |pos| (pos, !add_all && old.contains(pos)))
-        })
+        .map(|view| viewable_chunks(view.get()))
         .interleave()
-        .filter_map(|(pos, drop)| if drop { None } else { Some(pos) })
         .filter(|pos| inst.chunk(*pos).is_none())
         .unique()
         .collect();
