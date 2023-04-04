@@ -1801,12 +1801,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
- "futures-lite",
+ "flume",
  "fxhash",
  "lazy_static",
  "r2d2",
  "r2d2_sqlite",
- "tokio",
  "valence",
  "valence_protocol",
 ]

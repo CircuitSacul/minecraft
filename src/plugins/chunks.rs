@@ -1,6 +1,5 @@
 use bevy::tasks::AsyncComputeTaskPool;
 use r2d2_sqlite::rusqlite::params;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 use valence::prelude::*;
 
 use crate::{
@@ -9,10 +8,10 @@ use crate::{
 };
 
 #[derive(Resource)]
-pub struct GenChunksTx(Sender<ChunkPos>);
+pub struct GenChunksTx(flume::Sender<ChunkPos>);
 
 #[derive(Resource)]
-pub struct InsertChunksRx(Receiver<(ChunkPos, Chunk)>);
+pub struct InsertChunksRx(flume::Receiver<(ChunkPos, Chunk)>);
 
 pub struct ChunksPlugin;
 
@@ -30,7 +29,7 @@ fn unload_chunks(mut insts: Query<&mut Instance>) {
     inst.retain_chunks(|_, chunk| chunk.is_viewed_mut());
 }
 
-fn insert_chunks(mut insts: Query<&mut Instance>, mut rx: ResMut<InsertChunksRx>) {
+fn insert_chunks(mut insts: Query<&mut Instance>, rx: Res<InsertChunksRx>) {
     let mut inst = insts.single_mut();
 
     while let Ok((pos, chunk)) = rx.0.try_recv() {
@@ -44,7 +43,7 @@ fn request_chunk_gen(
     tx: Res<GenChunksTx>,
 ) {
     let inst = insts.single();
-    let chunks: Vec<_> = views
+    let chunks = views
         .into_iter()
         .map(|(current, old, client)| {
             let add_all = client.is_added();
@@ -55,45 +54,43 @@ fn request_chunk_gen(
         .interleave()
         .filter_map(|(pos, drop)| if drop { None } else { Some(pos) })
         .filter(|pos| inst.chunk(*pos).is_none())
-        .unique()
-        .collect();
+        .unique();
 
-    let tx = tx.0.clone();
-    let thread_pool = AsyncComputeTaskPool::get();
-    thread_pool
-        .spawn(async move {
-            for chunk in chunks {
-                tx.send(chunk).await.unwrap();
-            }
-        })
-        .detach();
+    for chunk in chunks {
+        tx.0.try_send(chunk).unwrap();
+    }
 }
 
 fn chunk_gen_worker(mut commands: Commands) {
-    let (gen_tx, mut gen_rx) = channel(1_000_000);
-    let (insert_tx, insert_rx) = channel(1_000_000);
+    let (gen_tx, gen_rx) = flume::unbounded();
+    let (insert_tx, insert_rx) = flume::unbounded();
 
     commands.insert_resource(GenChunksTx(gen_tx));
     commands.insert_resource(InsertChunksRx(insert_rx));
 
     let thread_pool = AsyncComputeTaskPool::get();
-    thread_pool
-        .spawn(async move {
-            while let Some(pos) = gen_rx.recv().await {
-                let chunk = match gen_chunk(pos).await {
-                    Ok(chunk) => chunk,
-                    Err(why) => {
-                        eprintln!("Warning: Chunk generation failed: {why}");
-                        continue;
-                    }
-                };
 
-                if let Err(why) = insert_tx.send((pos, chunk)).await {
-                    eprintln!("Warning: Sending generated chunk failed: {why}");
+    for _ in 0..std::thread::available_parallelism().unwrap().get() {
+        let insert_tx = insert_tx.clone();
+        let gen_rx = gen_rx.clone();
+        thread_pool
+            .spawn(async move {
+                while let Ok(pos) = gen_rx.recv_async().await {
+                    let chunk = match gen_chunk(pos).await {
+                        Ok(chunk) => chunk,
+                        Err(why) => {
+                            eprintln!("Warning: Chunk generation failed: {why}");
+                            continue;
+                        }
+                    };
+
+                    if let Err(why) = insert_tx.try_send((pos, chunk)) {
+                        eprintln!("Warning: Sending generated chunk failed: {why}");
+                    }
                 }
-            }
-        })
-        .detach();
+            })
+            .detach();
+    }
 }
 
 async fn gen_chunk(pos: ChunkPos) -> anyhow::Result<Chunk> {
